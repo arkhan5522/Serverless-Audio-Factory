@@ -29,12 +29,12 @@ jobs:
           USER_TEXT: ${{ github.event.client_payload.text }}
           USER_AUDIO_URL: ${{ github.event.client_payload.audio_url }}
         run: |
-          # 1. Setup Kaggle Auth
+          # Setup Kaggle Auth
           mkdir -p ~/.kaggle
           echo "{\"username\":\"$KAGGLE_USERNAME\",\"key\":\"$KAGGLE_KEY\"}" > ~/.kaggle/kaggle.json
           chmod 600 ~/.kaggle/kaggle.json
 
-          # 2. Inject Variables safely using a python builder
+          # Inject Variables safely using a python builder
           cat <<EOF > builder.py
           import os
           
@@ -53,7 +53,7 @@ jobs:
 
           python builder.py
 
-          # 3. Create Kernel Metadata
+          # Create Kernel Metadata
           echo '{
             "id": "'"$KAGGLE_USERNAME"'/chatterbox-tts-runner",
             "title": "Chatterbox TTS Runner",
@@ -72,14 +72,14 @@ jobs:
         env:
            GH_PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         run: |
-          # 1. Create auth header safely
+          # Create auth header safely
           echo "import os" > auth_header.py
           echo "os.environ['GH_PAT'] = '$GH_PAT'" >> auth_header.py
 
-          # 2. Prepend auth header to the script
+          # Prepend auth header to the script
           cat auth_header.py final_script.py > temp.py && mv temp.py final_script.py
           
-          # 3. Push
+          # Push
           kaggle kernels push -p .
 
       - name: Wait for Result (Smart Polling)
@@ -89,7 +89,7 @@ jobs:
             OUTPUT=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner)
             echo "$OUTPUT"
             
-            # FIXED: Check for uppercase "COMPLETE"
+            # Check for uppercase COMPLETE
             if [[ "$OUTPUT" == *"COMPLETE"* ]]; then
               echo "Kernel finished successfully!"
               break
@@ -101,18 +101,20 @@ jobs:
             echo "Still running... (Attempt $i/20)"
             sleep 30
           done
-      - name: Download Output
+
+      - name: Download and Prepare Output
         run: |
           kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner -p ./output
-          mv ./output/output.wav ./generated_audio.wav
+          mkdir public_audio
+          mv ./output/output.wav ./public_audio/generated_audio.wav
 
       - name: Deploy Result
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
+          publish_dir: ./public_audio
           publish_branch: audio-results
-          keep_files: true
+          force_orphan: true
           user_name: 'GitHub Action'
           user_email: 'action@github.com'
           commit_message: 'New Audio Generated'
