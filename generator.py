@@ -4,25 +4,22 @@ import subprocess
 import sys
 
 # ==========================================
-# 1. INSTALL DEPENDENCIES (CRITICAL STEP)
+# 1. INSTALL DEPENDENCIES
 # ==========================================
-print("Installing Chatterbox TTS... (This may take a minute)")
+print("Installing Chatterbox TTS...")
 try:
-    # We use subprocess to run pip inside the Kaggle script
     subprocess.check_call([sys.executable, "-m", "pip", "install", "chatterbox-tts", "--quiet"])
     subprocess.check_call([sys.executable, "-m", "pip", "install", "torchaudio", "--quiet"])
 except Exception as e:
     print(f"Failed to install dependencies: {e}")
-    exit(1)
+    # We continue because sometimes they are already installed in cached kernels
 
 # ==========================================
-# 2. NOW IMPORT LIBRARIES
+# 2. IMPORT LIBRARIES
 # ==========================================
-# We only import these AFTER the installation above succeeds
 import torch
 import torchaudio as ta
 import requests
-# The critical import that was failing:
 from chatterbox.tts import ChatterboxTTS
 
 # --- INJECTED_VARIABLES_START ---
@@ -34,21 +31,27 @@ print("Setting up...")
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 
-# 3. Download Reference Audio (Authenticated)
+# 3. Download Reference Audio
 ref_audio_path = "reference_voice.mp3"
-print(f"Downloading audio from: {AUDIO_URL}")
+print(f"Attempting to download from: {AUDIO_URL}")
 
 try:
-    # Get the token from the environment variable we passed in the .yml
     token = os.environ.get('GH_PAT', '')
-    headers = {}
     
-    # Only add headers if token exists (for private repos)
+    # DEBUG: Check if token exists (printing just the length for security)
+    if len(token) > 0:
+        print(f"Token detected (Length: {len(token)}). Auth should work.")
+    else:
+        print("WARNING: No Token detected. Download will fail if repo is private.")
+
+    headers = {}
     if token:
         headers['Authorization'] = f'token {token}'
-        headers['Accept'] = 'application/vnd.github.v3.raw'
     
-    # We need to handle potential redirects for raw content
+    # CRITICAL: This header tells GitHub API to give us the Raw File Bytes
+    headers['Accept'] = 'application/vnd.github.v3.raw'
+    
+    # We download the file
     r = requests.get(AUDIO_URL, headers=headers, allow_redirects=True)
     
     if r.status_code == 200:
@@ -56,9 +59,8 @@ try:
             f.write(r.content)
         print("Download successful.")
     else:
-        print(f"Download failed: {r.status_code}")
-        # Print first 100 chars of response to debug
-        print(r.text[:200]) 
+        print(f"Download failed with Code: {r.status_code}")
+        print(f"Response: {r.text[:300]}") # Print error details
         exit(1)
         
 except Exception as e:
