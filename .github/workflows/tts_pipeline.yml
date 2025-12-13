@@ -85,16 +85,15 @@ jobs:
       - name: Wait for Result (Smart Polling)
         run: |
           echo "Polling Kaggle for completion..."
-          # Loop for approx 10 minutes (20 * 30s)
           for i in {1..20}; do
             OUTPUT=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner)
             echo "$OUTPUT"
             
-            # Smart Check: Look for key words regardless of column formatting
-            if [[ "$OUTPUT" == *"complete"* ]]; then
+            # FIXED: Check for uppercase "COMPLETE"
+            if [[ "$OUTPUT" == *"COMPLETE"* ]]; then
               echo "Kernel finished successfully!"
               break
-            elif [[ "$OUTPUT" == *"error"* ]]; then
+            elif [[ "$OUTPUT" == *"ERROR"* ]]; then
               echo "Kernel failed!"
               exit 1
             fi
@@ -102,7 +101,6 @@ jobs:
             echo "Still running... (Attempt $i/20)"
             sleep 30
           done
-
       - name: Download Output
         run: |
           kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner -p ./output
