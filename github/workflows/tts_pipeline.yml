@@ -8,7 +8,7 @@ jobs:
   run-kaggle:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Needed to push the result back to the repo
+      contents: write
     
     steps:
       - name: Checkout Code
@@ -27,33 +27,29 @@ jobs:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
           USER_TEXT: ${{ github.event.client_payload.text }}
-          USER_AUDIO: ${{ github.event.client_payload.audio }}
+          # Note the name change to AUDIO_URL
+          USER_AUDIO_URL: ${{ github.event.client_payload.audio_url }}
         run: |
-          # 1. Setup Kaggle Auth
           mkdir -p ~/.kaggle
           echo "{\"username\":\"$KAGGLE_USERNAME\",\"key\":\"$KAGGLE_KEY\"}" > ~/.kaggle/kaggle.json
           chmod 600 ~/.kaggle/kaggle.json
 
-          # 2. Inject Variables into generator.py
-          # We use python to do the replacement to avoid bash escaping issues with Base64
           python -c "
           import os
           with open('generator.py', 'r') as f:
               content = f.read()
           
-          # Get payload data
           text = os.environ['USER_TEXT']
-          audio = os.environ['USER_AUDIO']
+          audio_url = os.environ['USER_AUDIO_URL']
           
+          # Replace placeholders
           content = content.replace('{{TEXT_PLACEHOLDER}}', text)
-          content = content.replace('{{AUDIO_B64_PLACEHOLDER}}', audio)
+          content = content.replace('{{AUDIO_URL_PLACEHOLDER}}', audio_url)
           
           with open('final_script.py', 'w') as f:
               f.write(content)
           "
 
-          # 3. Create Kernel Metadata
-          # Note: 'enable_gpu' must be true. slug must match your kaggle username/dataset convention
           echo '{
             "id": "'"$KAGGLE_USERNAME"'/chatterbox-tts-runner",
             "title": "Chatterbox TTS Runner",
@@ -74,12 +70,12 @@ jobs:
 
       - name: Wait for Result (Polling)
         run: |
-          echo "Polling Kaggle for completion..."
+          echo "Polling Kaggle..."
           STATUS="running"
           while [[ "$STATUS" != "complete" ]]; do
             sleep 30
             STATUS=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner | grep "status" | awk '{print $4}' | tr -d '"')
-            echo "Current Status: $STATUS"
+            echo "Status: $STATUS"
             if [[ "$STATUS" == "error" ]]; then exit 1; fi
           done
 
@@ -88,12 +84,12 @@ jobs:
           kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner -p ./output
           mv ./output/output.wav ./generated_audio.wav
 
-      - name: Deploy Result to Branch
+      - name: Deploy Result
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: .
-          publish_branch: audio-results  # We push results here so they are accessible via URL
+          publish_branch: audio-results
           keep_files: true
           user_name: 'GitHub Action'
           user_email: 'action@github.com'
