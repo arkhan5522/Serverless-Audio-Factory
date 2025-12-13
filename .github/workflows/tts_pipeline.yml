@@ -26,34 +26,40 @@ jobs:
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-          # We pass the Personal Access Token to Kaggle so it can download the audio
-          GH_PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }} 
           USER_TEXT: ${{ github.event.client_payload.text }}
           USER_AUDIO_URL: ${{ github.event.client_payload.audio_url }}
         run: |
+          # 1. Setup Kaggle Auth
           mkdir -p ~/.kaggle
           echo "{\"username\":\"$KAGGLE_USERNAME\",\"key\":\"$KAGGLE_KEY\"}" > ~/.kaggle/kaggle.json
           chmod 600 ~/.kaggle/kaggle.json
 
-          # Inject variables into the python script
-          python -c "
+          # 2. Inject Variables into generator.py
+          # We use a helper script to avoid escaping issues
+          cat <<EOF > builder.py
           import os
+          
+          # Read the template
           with open('generator.py', 'r') as f:
               content = f.read()
           
-          text = os.environ['USER_TEXT']
-          audio_url = os.environ['USER_AUDIO_URL']
-          # We don't inject the PAT into the text of the script for security,
-          # we will pass it as an environment variable to the Kaggle Kernel.
+          # Get vars from env
+          text = os.environ.get('USER_TEXT', '')
+          audio_url = os.environ.get('USER_AUDIO_URL', '')
           
+          # Replace placeholders
           content = content.replace('{{TEXT_PLACEHOLDER}}', text)
           content = content.replace('{{AUDIO_URL_PLACEHOLDER}}', audio_url)
           
+          # Write final script
           with open('final_script.py', 'w') as f:
               f.write(content)
-          "
+          EOF
 
-          # Create Metadata - We pass GH_PAT as a secret environment variable to Kaggle
+          # Run the builder
+          python builder.py
+
+          # 3. Create Kernel Metadata
           echo '{
             "id": "'"$KAGGLE_USERNAME"'/chatterbox-tts-runner",
             "title": "Chatterbox TTS Runner",
@@ -72,26 +78,24 @@ jobs:
         env:
            GH_PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         run: |
-          # We use a trick to pass the PAT: We append it to the script so it runs inside Kaggle
-          # because Kaggle API doesn't support env vars easily in script mode without Config.
-          
-          # Appending the Auth Logic directly to the script file before pushing
-          echo "
-import os
-os.environ['GH_PAT'] = '$GH_PAT'
-" > auth_header.py
+          # 1. Create auth header safely
+          echo "import os" > auth_header.py
+          echo "os.environ['GH_PAT'] = '$GH_PAT'" >> auth_header.py
+
+          # 2. Prepend auth header to the script
           cat auth_header.py final_script.py > temp.py && mv temp.py final_script.py
           
+          # 3. Push
           kaggle kernels push -p .
 
       - name: Wait for Result (Polling)
         run: |
-          echo "Polling Kaggle..."
+          echo "Polling Kaggle for completion..."
           STATUS="running"
           while [[ "$STATUS" != "complete" ]]; do
             sleep 30
             STATUS=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner | grep "status" | awk '{print $4}' | tr -d '"')
-            echo "Status: $STATUS"
+            echo "Current Status: $STATUS"
             if [[ "$STATUS" == "error" ]]; then exit 1; fi
           done
 
@@ -100,7 +104,7 @@ os.environ['GH_PAT'] = '$GH_PAT'
           kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner -p ./output
           mv ./output/output.wav ./generated_audio.wav
 
-      - name: Deploy Result
+      - name: Deploy Result to Branch
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
