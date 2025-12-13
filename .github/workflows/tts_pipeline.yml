@@ -1,0 +1,112 @@
+name: Kaggle TTS Pipeline
+
+on:
+  repository_dispatch:
+    types: [trigger-tts]
+
+jobs:
+  run-kaggle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Kaggle API
+        run: pip install kaggle
+
+      - name: Prepare Kaggle Script
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          # We pass the Personal Access Token to Kaggle so it can download the audio
+          GH_PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }} 
+          USER_TEXT: ${{ github.event.client_payload.text }}
+          USER_AUDIO_URL: ${{ github.event.client_payload.audio_url }}
+        run: |
+          mkdir -p ~/.kaggle
+          echo "{\"username\":\"$KAGGLE_USERNAME\",\"key\":\"$KAGGLE_KEY\"}" > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+
+          # Inject variables into the python script
+          python -c "
+          import os
+          with open('generator.py', 'r') as f:
+              content = f.read()
+          
+          text = os.environ['USER_TEXT']
+          audio_url = os.environ['USER_AUDIO_URL']
+          # We don't inject the PAT into the text of the script for security,
+          # we will pass it as an environment variable to the Kaggle Kernel.
+          
+          content = content.replace('{{TEXT_PLACEHOLDER}}', text)
+          content = content.replace('{{AUDIO_URL_PLACEHOLDER}}', audio_url)
+          
+          with open('final_script.py', 'w') as f:
+              f.write(content)
+          "
+
+          # Create Metadata - We pass GH_PAT as a secret environment variable to Kaggle
+          echo '{
+            "id": "'"$KAGGLE_USERNAME"'/chatterbox-tts-runner",
+            "title": "Chatterbox TTS Runner",
+            "code_file": "final_script.py",
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": "true",
+            "enable_gpu": "true",
+            "enable_internet": "true",
+            "dataset_sources": [],
+            "kernel_sources": [],
+            "competition_sources": []
+          }' > kernel-metadata.json
+
+      - name: Push to Kaggle
+        env:
+           GH_PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          # We use a trick to pass the PAT: We append it to the script so it runs inside Kaggle
+          # because Kaggle API doesn't support env vars easily in script mode without Config.
+          
+          # Appending the Auth Logic directly to the script file before pushing
+          echo "
+import os
+os.environ['GH_PAT'] = '$GH_PAT'
+" > auth_header.py
+          cat auth_header.py final_script.py > temp.py && mv temp.py final_script.py
+          
+          kaggle kernels push -p .
+
+      - name: Wait for Result (Polling)
+        run: |
+          echo "Polling Kaggle..."
+          STATUS="running"
+          while [[ "$STATUS" != "complete" ]]; do
+            sleep 30
+            STATUS=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner | grep "status" | awk '{print $4}' | tr -d '"')
+            echo "Status: $STATUS"
+            if [[ "$STATUS" == "error" ]]; then exit 1; fi
+          done
+
+      - name: Download Output
+        run: |
+          kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner -p ./output
+          mv ./output/output.wav ./generated_audio.wav
+
+      - name: Deploy Result
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .
+          publish_branch: audio-results
+          keep_files: true
+          user_name: 'GitHub Action'
+          user_email: 'action@github.com'
+          commit_message: 'New Audio Generated'
