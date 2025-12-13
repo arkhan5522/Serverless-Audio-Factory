@@ -34,29 +34,23 @@ jobs:
           echo "{\"username\":\"$KAGGLE_USERNAME\",\"key\":\"$KAGGLE_KEY\"}" > ~/.kaggle/kaggle.json
           chmod 600 ~/.kaggle/kaggle.json
 
-          # 2. Inject Variables into generator.py
-          # We use a helper script to avoid escaping issues
+          # 2. Inject Variables safely using a python builder
           cat <<EOF > builder.py
           import os
           
-          # Read the template
           with open('generator.py', 'r') as f:
               content = f.read()
           
-          # Get vars from env
           text = os.environ.get('USER_TEXT', '')
           audio_url = os.environ.get('USER_AUDIO_URL', '')
           
-          # Replace placeholders
           content = content.replace('{{TEXT_PLACEHOLDER}}', text)
           content = content.replace('{{AUDIO_URL_PLACEHOLDER}}', audio_url)
           
-          # Write final script
           with open('final_script.py', 'w') as f:
               f.write(content)
           EOF
 
-          # Run the builder
           python builder.py
 
           # 3. Create Kernel Metadata
@@ -88,15 +82,25 @@ jobs:
           # 3. Push
           kaggle kernels push -p .
 
-      - name: Wait for Result (Polling)
+      - name: Wait for Result (Smart Polling)
         run: |
           echo "Polling Kaggle for completion..."
-          STATUS="running"
-          while [[ "$STATUS" != "complete" ]]; do
+          # Loop for approx 10 minutes (20 * 30s)
+          for i in {1..20}; do
+            OUTPUT=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner)
+            echo "$OUTPUT"
+            
+            # Smart Check: Look for key words regardless of column formatting
+            if [[ "$OUTPUT" == *"complete"* ]]; then
+              echo "Kernel finished successfully!"
+              break
+            elif [[ "$OUTPUT" == *"error"* ]]; then
+              echo "Kernel failed!"
+              exit 1
+            fi
+            
+            echo "Still running... (Attempt $i/20)"
             sleep 30
-            STATUS=$(kaggle kernels status ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner | grep "status" | awk '{print $4}' | tr -d '"')
-            echo "Current Status: $STATUS"
-            if [[ "$STATUS" == "error" ]]; then exit 1; fi
           done
 
       - name: Download Output
@@ -104,7 +108,7 @@ jobs:
           kaggle kernels output ${{ secrets.KAGGLE_USERNAME }}/chatterbox-tts-runner -p ./output
           mv ./output/output.wav ./generated_audio.wav
 
-      - name: Deploy Result to Branch
+      - name: Deploy Result
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
