@@ -1,31 +1,31 @@
 # generator.py
-import base64
 import os
 import torch
 import torchaudio as ta
 from chatterbox.tts import ChatterboxTTS
+import urllib.request
 
 # --- INJECTED_VARIABLES_START ---
-# The GitHub Action will replace these dummy values
 TEXT_TO_SPEAK = """{{TEXT_PLACEHOLDER}}"""
-AUDIO_B64 = """{{AUDIO_B64_PLACEHOLDER}}"""
+AUDIO_URL = """{{AUDIO_URL_PLACEHOLDER}}"""
 # --- INJECTED_VARIABLES_END ---
 
-# 1. Setup Device
+print("Setting up...")
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Using device: {device}")
 
-# 2. Decode the Reference Audio
+# 1. Download Reference Audio from the URL
 ref_audio_path = "reference_voice.mp3"
-with open(ref_audio_path, "wb") as f:
-    f.write(base64.b64decode(AUDIO_B64))
+print(f"Downloading audio from: {AUDIO_URL}")
+try:
+    urllib.request.urlretrieve(AUDIO_URL, ref_audio_path)
+except Exception as e:
+    print(f"Failed to download audio: {e}")
+    exit(1)
 
-# 3. Load Model & Audio
+# 2. Load Model & Audio
 model = ChatterboxTTS.from_pretrained(device=device)
-reference_audio, sr = ta.load(ref_audio_path)
 
-# 4. Generate Speech (Simple chunking if needed, but keeping it simple for speed)
-# For very long text, you'd want the chunking function from your original script.
+# 3. Generate
 print("Generating speech...")
 with torch.no_grad():
     wav = model.generate(
@@ -35,7 +35,7 @@ with torch.no_grad():
         cfg_weight=0.5
     )
 
-# 5. Save Output
+# 4. Save Output
 output_filename = "output.wav"
 ta.save(output_filename, wav.cpu(), model.sr)
 print("Done.")
